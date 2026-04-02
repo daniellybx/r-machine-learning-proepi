@@ -270,11 +270,18 @@ cat("\nSINASC - Funcao de custo do K-Prototypes:", custo_kproto, "\n")
 # calculamos a Silhueta usando a Distancia de Gower (ideal para dados mistos).
 # Ela traduz a qualidade do agrupamento em uma escala de -1 a 1:
 # Valores proximos de 1 indicam boa separacao; proximos de 0 indicam sobreposicao.
-distancias_gower_sinasc <- cluster::daisy(dados_sinasc_cluster, metric = "gower")
-obj_silhueta_kproto <- cluster::silhouette(modelo_kproto$cluster, distancias_gower_sinasc)
+
+tamanho_amostra <- min(10000, nrow(dados_sinasc_cluster))
+set.seed(42) # Para manter reprodutível
+indices <- sample(seq_len(nrow(dados_sinasc_cluster)), size = tamanho_amostra)
+
+dados_amostra <- dados_sinasc_cluster[indices, ]
+clusters_amostra <- modelo_kproto$cluster[indices]
+
+distancias_gower_sinasc <- cluster::daisy(dados_amostra, metric = "gower")
+obj_silhueta_kproto <- cluster::silhouette(clusters_amostra, distancias_gower_sinasc)
 largura_media_silhueta_kproto <- mean(obj_silhueta_kproto[, "sil_width"], na.rm = TRUE)
 cat("SINASC - Silhueta Media (K-Prototypes / Gower):", round(largura_media_silhueta_kproto, 4), "\n")
-
 # Anexa clusters para perfilamento.
 dados_sinasc_cluster <- dados_sinasc_cluster %>%
   mutate(cluster_kproto = factor(modelo_kproto$cluster))
