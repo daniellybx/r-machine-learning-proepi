@@ -12,7 +12,7 @@
 # SESSAO 1 - PREPARACAO DO AMBIENTE E DIRETORIO DE RESULTADOS
 # Objetivo da sessao:
 # - Carregar pacotes necessarios para clusterizacao e avaliacao.
-# - Criar pasta de saida para salvar summaries (.md) e figuras.
+# - Criar pasta de saida para salvar summaries (.md) e figuras (ex: dendrogramas).
 # - Definir funcao auxiliar para exportacao padronizada de graficos.
 # ------------------------------------------------------------------------------
 if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr")
@@ -52,6 +52,18 @@ salvar_grafico <- function(grafico, nome_arquivo, largura = 10, altura = 6) {
 # - Preparar variaveis numericas de data e idade para clusterizacao.
 # - Ajustar Hierarquico Aglomerativo e K-Means com escolha de K por silhueta.
 # - Avaliar qualidade por variancia explicada, silhueta e concordancia entre modelos.
+#
+# ABORDAGENS DE CLUSTERIZACAO UTILIZADAS:
+# -> K-Means: 
+#    * Ideal para datasets grandes (alta velocidade e baixo uso de memoria).
+#    * Exige a definicao previa do numero de clusters (k).
+#    * Melhor aplicado quando se espera clusters esfericos/similares em tamanho.
+#
+# -> Aglomerativo Hierarquico:
+#    * Ideal para datasets pequenos a medios (alto custo computacional).
+#    * Nao exige a definicao de 'k' a priori (definido via corte no dendrograma).
+#    * Excelente para visualizar a taxonomia/hierarquia dos dados e lidar 
+#      com formatos de clusters irregulares.
 # ------------------------------------------------------------------------------
 
 # Importa base tratada do SINAN.
@@ -134,11 +146,22 @@ modelo_kmeans <- kmeans(
 )
 
 # Avaliacao rigorosa 1: variancia explicada (BSS/TSS).
+# Calcula a porcentagem da dispersao total dos dados (TSS) que 
+# foi "explicada" pela divisao dos grupos (BSS). Em termos práticos, mede a qualidade 
+# do agrupamento: um valor mais proximo de 1 (100%) indica que os clusters estao 
+# muito bem separados e definidos uns dos outros.
 percentual_variancia_explicada <- modelo_kmeans$betweenss / modelo_kmeans$totss
 cat("\nSINAN - Variancia explicada (BSS/TSS):", round(percentual_variancia_explicada, 4), "\n")
 cat("Interpretacao: quanto maior o BSS/TSS, maior a separacao global entre clusters.\n")
 
 # Avaliacao rigorosa 2: Silhouette do K-Means.
+# Avalia a qualidade do agrupamento verificando se cada ponto 
+# foi colocado no cluster "certo". Ele mede o quão próximo um ponto está dos 
+# outros do seu próprio grupo (coesão) em comparação com o grupo vizinho mais 
+# próximo (separação). A pontuação vai de -1 a 1:
+# -> Próximo a 1: O ponto está muito bem agrupado.
+# -> Próximo a 0: O ponto está na fronteira entre dois clusters (sobreposição).
+# -> Valores negativos: O ponto provavelmente foi colocado no cluster errado.
 obj_silhueta_kmeans <- cluster::silhouette(modelo_kmeans$cluster, matriz_distancias_sinan)
 grafico_silhueta_kmeans <- factoextra::fviz_silhouette(obj_silhueta_kmeans) +
   ggplot2::labs(
@@ -152,6 +175,14 @@ cat("\nSINAN - Largura media da silhueta:", round(largura_media_silhueta, 4), "\
 cat("Interpretacao: valores proximos de 1 indicam melhor coesao/separacao; proximos de 0 indicam sobreposicao.\n")
 
 # Avaliacao rigorosa 3: comparacao Hierarquico vs K-Means.
+# Cria uma tabela de contingencia cruzando os resultados dos 
+# dois metodos de agrupamento. O objetivo e verificar a "estabilidade" ou robustez
+# dos clusters. Se os dois algoritmos agruparam os mesmos registros nos mesmos 
+# grupos (concentrando os valores em poucas celulas especificas da tabela), 
+# isso indica que os agrupamentos encontrados sao consistentes e tem forte presenca
+# nos dados, nao sendo apenas um artefato de um algoritmo especifico. Uma tabela 
+# muito "espalhada" indica que os modelos discordam sobre como agrupar os dados.
+
 clusters_hclust <- cutree(modelo_hclust, k = k_otimo)
 clusters_kmeans <- modelo_kmeans$cluster
 tabela_concordancia <- table(Hclust = clusters_hclust, Kmeans = clusters_kmeans)
@@ -219,6 +250,12 @@ modelo_kproto <- clustMixType::kproto(
 )
 
 # Funcao de custo (objetivo do algoritmo).
+# Extrai a medida de erro ou "custo" total do modelo K-Prototypes. 
+# Como esse algoritmo agrupa dados mistos (numéricos e categóricos), o custo 
+# representa a soma total da heterogeneidade (distâncias e diferenças) dentro 
+# de todos os clusters. O objetivo matemático do algoritmo é minimizar esse valor: 
+# quanto menor o custo final, mais coesos e semelhantes entre si são os registros 
+# que ficaram dentro do mesmo grupo.
 custo_kproto <- if (!is.null(modelo_kproto$tot.withinss)) {
   modelo_kproto$tot.withinss
 } else if (!is.null(modelo_kproto$tot.within)) {
@@ -227,7 +264,16 @@ custo_kproto <- if (!is.null(modelo_kproto$tot.withinss)) {
   NA_real_
 }
 cat("\nSINASC - Funcao de custo do K-Prototypes:", custo_kproto, "\n")
-cat("Interpretacao: o algoritmo busca minimizar esse custo total de heterogeneidade interna.\n")
+
+# Metrica complementar de facil interpretacao (Silhueta).
+# Como o valor do custo acima e um numero absoluto dificil de avaliar isoladamente,
+# calculamos a Silhueta usando a Distancia de Gower (ideal para dados mistos).
+# Ela traduz a qualidade do agrupamento em uma escala de -1 a 1:
+# Valores proximos de 1 indicam boa separacao; proximos de 0 indicam sobreposicao.
+distancias_gower_sinasc <- cluster::daisy(dados_sinasc_cluster, metric = "gower")
+obj_silhueta_kproto <- cluster::silhouette(modelo_kproto$cluster, distancias_gower_sinasc)
+largura_media_silhueta_kproto <- mean(obj_silhueta_kproto[, "sil_width"], na.rm = TRUE)
+cat("SINASC - Silhueta Media (K-Prototypes / Gower):", round(largura_media_silhueta_kproto, 4), "\n")
 
 # Anexa clusters para perfilamento.
 dados_sinasc_cluster <- dados_sinasc_cluster %>%
